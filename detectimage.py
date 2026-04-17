@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 
-
 def outline_objects(scene_path, template_path, threshold=0.8):
     # Load images
     scene = scene_path
@@ -13,8 +12,8 @@ def outline_objects(scene_path, template_path, threshold=0.8):
     h, w = template.shape[:2]
     
     # Convert to grayscale
-    scene_gray = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
-    temp_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    scene_gray = cv2.cvtColor(scene, cv2.COLOR_BGRA2BGR)
+    temp_gray = cv2.cvtColor(template, cv2.COLOR_BGRA2BGR)
 
     # Perform matching
     res = cv2.matchTemplate(scene_gray, temp_gray, cv2.TM_CCOEFF_NORMED)
@@ -34,6 +33,7 @@ def outline_objects(scene_path, template_path, threshold=0.8):
     # Draw the outlines
     for (x, y, w, h) in rects:
         cv2.rectangle(scene, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        cv2.putText(scene, template_path, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         
     return scene
 

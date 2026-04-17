@@ -3,6 +3,8 @@ import mss
 import numpy as np
 import math
 import os
+import detectimage
+import time
 from ultralytics import YOLO
 
 def main():
@@ -18,58 +20,64 @@ def main():
         os.makedirs("positives", exist_ok=True)
 
         img_counter = 0
+        cap = cv2.VideoCapture(0)
+        prev_time = 0
+        model = YOLO("runs/detect/train2/weights/best.pt")
 
         while True:
             #capture the game screen
+            ret,frame = cap.read()
             screenshot = sct.grab(gameScreen)
+            curr_time = time.time()
+            fps = 1/ (curr_time - prev_time)
+            prev_time = curr_time
             frame = np.array(screenshot)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-            playerShot = frame[10:850,200:500]
-
-            trackshot = frame[100:900,400:1200]
+            #playerShot = frame[10:850,200:500]
             
-            model = YOLO("runs/detect/train2/weights/best.pt")
 
-            player_pos = detect_minecart(playerShot,model)
+            player_pos = detect_minecart(frame,model)
 
-            tracks_pos = findlines(trackshot)
+            tracks_pos = findlines(frame)
 
-            barricade_pos = findBarricades(trackshot)
+            barricade_pos = findBarricades(frame)
 
             print(f"player: {player_pos} tracks: {len(tracks_pos)} barricade?: {barricade_pos}")
 
-            #fullscreen = roboVision(player_pos,tracks_pos,barricade_pos, frame)
+            fullscreen = roboVision(player_pos,tracks_pos,barricade_pos, frame)
+            cv2.putText(fullscreen, f"FPS: {int(fps)}", (20, 70), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            #cv2.imshow("Region Capture", fullscreen)
+            cv2.imshow("Region Capture", fullscreen)
 
             if cv2.waitKey(1) & 0xFF == 27:  # press ESC to quit
                 break
-
+    cap.release()
     cv2.destroyAllWindows()
     return
 
 #see what the robot sees
-def roboVision(player_pos, tracks_pos, barriacade_pos, frame):
+def roboVision(player_pos = 0, tracks_pos = 0, barriacade_pos = 0, frame = 0):
     
     x1, y1, x2, y2 = player_pos
-    x1 +=200
-    x2 +=200
+    x1
+    x2
     # draw box
     cv2.rectangle(frame, (x1, y1), (x2, y2), (255,0,0), 2)
 
     # label
-    cv2.putText(frame, "minecart", (x1, y1-10),
+    cv2.putText(frame, "minecart", (x1, y1+10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
-    
     for line in tracks_pos:
-        x1, y1, x2, y2 = tracks_pos
-        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        x1, y1, x2, y2 = line
+        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
-    MPx, MPy = barriacade_pos
-    if(MPx != 0 and MPy != 0):
-        cv2.putText(frame,"Barrricade",(MPx, MPy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.6,(255, 0, 0),2)
-        cv2.rectangle(frame, (MPx,MPy),(MPx+40,MPy+60),(255,0,0),2)
+    #MPx, MPy = barriacade_pos
+    frame = detectimage.outline_objects(frame, 'barricade3.png', threshold=0.6)
+    #cv2.putText(frame,"Barrricade",(MPx, MPy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.6,(255, 0, 0),2)
+    #cv2.rectangle(frame, (MPx,MPy),(MPx+40,MPy+60),(255,0,0),2)
+    
 
     return frame
 
@@ -97,7 +105,7 @@ def findBarricades(frame):
 
     confidence = 1 - mn  # convert to "higher is better"
 
-    if confidence < 0.7:
+    if confidence < 0.6:
         return 0,0
 
     # Draw the rectangle:
