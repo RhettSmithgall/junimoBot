@@ -1,72 +1,36 @@
-import random
-import os
-import time
+import mss
+import numpy as np
+import cv2
 
-# Clear screen (works on Windows/Linux/Mac)
-os.system('cls' if os.name == 'nt' else 'clear')
+def find_ground_profile(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
 
-# Players
-players = {
-    "Redwick": "R",
-    "Gragas": "G",
-    "Coven": "C",
-    "Silver": "S",
-    "Jorkin": "J"
-}
+    h, w = edges.shape
 
-# Grid size
-WIDTH = 10
-HEIGHT = 8
+    ground_y = np.full(w, -1, dtype=np.int32)
 
-# Random positions
-positions = {}
-for name in players:
-    positions[name] = (random.randint(0, WIDTH-1), random.randint(0, HEIGHT-1))
+    step = 2  # skip pixels for speed
 
-# Build grid
-grid = [["." for _ in range(WIDTH)] for _ in range(HEIGHT)]
+    for x in range(0, w, step):
+        for y in range(h - 1, h // 3, -1):  # bottom → upward search
+            if edges[y, x] > 0:
+                ground_y[x] = y
+                break
 
-for name, (x, y) in positions.items():
-    grid[y][x] = players[name]
+    return ground_y
 
-# Fake d20 roll
-def d20():
-    return random.randint(1, 20)
+with mss.mss() as sct:
+    monitor = {"top": 150, "left": 10, "width": 1500, "height": 825}
+    img = np.array(sct.grab(monitor))
 
-# Chat log
-chat = [
-    f"Dungeon Master: Welcome, adventurers...",
-    f"Redwick rolls a d20... ({d20()})",
-    f"Gragas attempts to smash a barrel... ({d20()})",
-    f"Coven casts a mysterious spell... ({d20()})",
-    f"Silver sneaks into the shadows... ({d20()})",
-    f"Jorkin tries something stupid... ({d20()})",
-    f"Dungeon Master: The dungeon trembles..."
-]
+    frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-# UI rendering
-print("="*50)
-print("         DUNGEON TERMINAL INTERFACE ")
-print("="*50)
+    ground_y = find_ground_profile(frame)
 
-# Grid
-print("\nMAP:")
-for row in grid:
-    print(" ".join(row))
-
-# Chat window
-print("\nCHAT:")
-print("-"*50)
-for line in chat:
-    print(line)
-print("-"*50)
-
-print("\n> Type 'roll' to roll a d20")
-
-# Optional little animation for flavor
-time.sleep(0.5)
-print("\nDungeon Master is thinking...")
-time.sleep(1)
-print("A goblin appears!")
-
-
+    for x in range(len(ground_y)):
+        y = ground_y[x]
+        if y != -1:
+            cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
+    cv2.imshow("ground", frame)
+    cv2.waitKey(0)

@@ -19,6 +19,8 @@ def main():
 
         img_counter = 0
 
+        model = YOLO("runs/detect/train2/weights/best.pt")
+
         while True:
             #capture the game screen
             screenshot = sct.grab(gameScreen)
@@ -28,8 +30,6 @@ def main():
             playerShot = frame[10:850,200:500]
 
             trackshot = frame[100:900,400:1200]
-            
-            model = YOLO("runs/detect/train2/weights/best.pt")
 
             player_pos = detect_minecart(playerShot,model)
 
@@ -63,7 +63,7 @@ def roboVision(player_pos, tracks_pos, barriacade_pos, frame):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
     
     for line in tracks_pos:
-        x1, y1, x2, y2 = tracks_pos
+        x1, y1, x2, y2 = line
         cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
     MPx, MPy = barriacade_pos
@@ -72,7 +72,6 @@ def roboVision(player_pos, tracks_pos, barriacade_pos, frame):
         cv2.rectangle(frame, (MPx,MPy),(MPx+40,MPy+60),(255,0,0),2)
 
     return frame
-
 
 def detect_minecart(frame,model):
     results = model(frame, max_det=1, verbose=False, stream=False)
