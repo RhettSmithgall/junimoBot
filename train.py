@@ -1,10 +1,14 @@
 from ultralytics import YOLO
 
-model = YOLO("yolo11n.pt") 
+def main():
+    model = YOLO("yolo26n.pt")
 
-results = model.train(
-    data="path/to/data.yaml", 
-    epochs=100, 
-    imgsz=640, 
-    device=0  
-)
+    model.train(
+        data="trackTraining/dataset.yaml",
+        epochs=100,
+        imgsz=640,
+        device=0
+    )
+
+if __name__ == "__main__":
+    main()

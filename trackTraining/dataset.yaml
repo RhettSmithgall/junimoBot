@@ -1,0 +1,9 @@
+path: trackTraining
+
+train: images/train
+val: images/train
+
+names:
+  0: straight
+  1: down_slope
+  2: up_slope

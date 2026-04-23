@@ -6,13 +6,6 @@ from ultralytics import YOLO
 import threading
 import math
 
-track_templates = [
-    cv2.imread("tracks/track1.png", 0),
-    cv2.imread("tracks/track2.png", 0),
-    cv2.imread("tracks/track3.png", 0),
-    cv2.imread("tracks/track4.png", 0)
-]
-
 shared = {
     "frame": None,
     "player": None,
@@ -24,7 +17,9 @@ shared = {
 lock = threading.Lock()
 running = True
 
-model = YOLO("runs/detect/train2/weights/best.pt")
+Kart_model = YOLO("runs/detect/train2/weights/best.pt")
+
+track_model = YOLO("runs/detect/train-4/weights/best.pt")
 
 def main():
     threads = [
@@ -55,7 +50,7 @@ def main():
             frame = frame.copy()
 
         if(roboVision(frame, player, tracks, progress)):
-            break
+           break
 
         frames += 1
         if time.time() - last_time >= 1:
@@ -94,6 +89,8 @@ def find_progress():
 
         loc = np.where(res >= threshold)
 
+        x = None
+
         for pt in zip(*loc[::-1]):
             x = pt[0]
 
@@ -130,18 +127,39 @@ def roboVision(frame, player, tracks, progress):
             2
         )
 
-    #draw tracks
-    if tracks is not None:
-        for line in tracks:
-            x1, y1, x2, y2 = line
-            cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
     #draw progress
     if progress is None:
         progress = 0
+
     percent = int((progress / 800) * 100)
     text = f"PROGRESS: %{percent}"
     cv2.putText(frame, text, (750 - len(text)*10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255,0,0), 3, cv2.LINE_AA)
+
+    # --- draw platforms (GREEN) ---
+    if tracks is not None:
+        for box in tracks:
+            # xyxy = (x1, y1, x2, y2) in PIXELS already
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+            cls = int(box.cls[0]) if box.cls is not None else -1
+            conf = float(box.conf[0]) if box.conf is not None else 0.0
+
+            label = f"{cls} {conf:.2f}"
+
+            y1+=20
+
+            if cls == 0:
+                # flat
+                cv2.line(frame, (x1, y1), (x2, y1), (255, 0, 0), 3)
+
+            elif cls == 1:
+                # slope down
+                cv2.line(frame, (x1, y1), (x2, y1+60), (255, 0, 0), 2)
+
+            elif cls == 2:
+                # slope up
+                cv2.line(frame, (x1, y1-60), (x2, y1), (255, 0, 0), 2)
+
 
     cv2.imshow("Game", frame)
 
@@ -162,69 +180,26 @@ def capture_loop():
                 shared["frame"] = frame
 
 def find_tracks():
-    while running:
+ while running:
         with lock:
-            if shared["frame"] is None:
-                continue
-            
-            thisFrame = shared["frame"].copy()
+            frame = shared["frame"]
 
-        thisFrame = cv2.cvtColor(thisFrame, cv2.COLOR_BGRA2BGR)
-        thisFrame = thisFrame[90:825,:]
+        if frame is None:
+            continue
 
-        img = thisFrame
-        # --- 3 track colors (hex -> BGR) ---
-        colors = [
-            (0xA7, 0xD3, 0xE7),  # e7d3a7
-            (0x80, 0x94, 0xAF),  # af9480
-            (0xAB, 0xBE, 0xCF)   # cfbeab
-        ]
+        thisFrame = frame.copy()
 
-        tolerance = 20
+        results = track_model(thisFrame, conf=0.25, verbose=False)[0]
 
-        # --- build mask ---
-        mask = np.zeros(img.shape[:2], dtype=np.uint8)
+        boxes = results.boxes
 
-        for (b, g, r) in colors:
-            lower = np.array([b - tolerance, g - tolerance, r - tolerance])
-            upper = np.array([b + tolerance, g + tolerance, r + tolerance])
-
-            color_mask = cv2.inRange(img, lower, upper)
-            mask = cv2.bitwise_or(mask, color_mask)
-
-        # --- clean noise ---
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-        # --- edges ---
-        edges = cv2.Canny(mask, 50, 150)
-
-        # --- hough lines ---
-        lines = cv2.HoughLinesP(
-            edges,
-            1,
-            np.pi / 180,
-            threshold=80,
-            minLineLength=40,
-            maxLineGap=10
-        )
-
-        tracks = []
-
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                angle = get_angle(x1, y1, x2, y2)
-                length = np.hypot(x2 - x1, y2 - y1)
-                
-                if (length > 50) and (angle == 0 or angle == 45):
-                    #print(angle)
-                    tracks.append((x1, y1+90, x2, y2+90))
+        if boxes is None:
+            continue
 
         with lock:
-            shared["tracks"] = tracks
-    
+            shared["tracks"] = boxes
+
+
 def get_angle(x1, y1, x2, y2):
     return abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
 
@@ -242,7 +217,7 @@ def find_kart():
         crop = thisFrame[:, 270:430]
 
         #call upon the power of yolo
-        results = model.predict(crop, conf=0.5, verbose=False)
+        results = Kart_model.predict(crop, conf=0.5, verbose=False)
 
         pos = None
         for box in results[0].boxes:
