@@ -9,6 +9,20 @@ import pyautogui
 import torch
 import torch.nn as nn
 
+class DQN(nn.Module):
+    def __init__(self, input_size, output_size):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_size)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 shared = {
     "frame": None,
     "player": None,
@@ -19,9 +33,6 @@ shared = {
     "level": 0,
     "attempt": 0
     }
-
-last_jump_time = 0
-JUMP_COOLDOWN = 0     
 
 lock = threading.Lock()
 running = True
@@ -65,8 +76,8 @@ def main():
 
         action(player,tracks)
 
-        if(roboVision(frame, player, tracks, progress)):
-           break
+        #if(roboVision(frame, player, tracks, progress)):
+           #break
 
         frames += 1
         if time.time() - last_time >= 1:
@@ -74,65 +85,9 @@ def main():
             frames = 0
             last_time = time.time()
 
-def jump(duration):
-    pyautogui.keyDown('space')
-    time.sleep(duration)
-    pyautogui.keyUp('space')
-
-
-def can_jump():
-    global last_jump_time
-    now = time.time()
-
-    if now - last_jump_time > JUMP_COOLDOWN:
-        last_jump_time = now
-        return True
-    return False
-
-
 def action(player, tracks):
-    if player is None or tracks is None:
-        return
 
-    player_x, player_y = player
-
-    # convert YOLO boxes → simple tuples
-    simple_tracks = []
-    for box in tracks:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        simple_tracks.append((x1, y1, x2, y2))
-
-    current = None
-    for t in simple_tracks:
-        x1, y1, x2, y2 = t
-        if x1 <= player_x <= x2 and abs(player_y - y1) < 60:
-            current = t
-            break
-
-    if current is None:
-        return
-
-    next_track = get_next_track(player, tracks)
-
-    # if nothing ahead → panic jump
-    if next_track is None:
-        if can_jump():
-            jump(0.35)
-        return
-
-    gap = get_gap_size(current, next_track)
-
-    # distance from player to edge
-    distance_to_edge = current[2] - player_x
-
-    # only jump near edge
-    if distance_to_edge < 120:
-        height_diff = next_track[1] - current[1]
-
-        duration = get_jump_duration(gap, height_diff)
-
-        if can_jump():
-            jump(duration)
+    return
 
 def get_current_track(player, tracks):
     player_x,player_y = player
@@ -260,15 +215,15 @@ def roboVision(frame, player, tracks, progress):
 
             if cls == 0:
                 # flat
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 3)
+                cv2.line(frame, (x1, y1), (x2, y1), (255, 0, 0), 3)
 
             elif cls == 1:
                 # slope down
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.line(frame, (x1, y1), (x2, y1+60), (255, 0, 0), 2)
 
             elif cls == 2:
                 # slope up
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.line(frame, (x1, y1+60), (x2, y1), (255, 0, 0), 2)
 
 
     cv2.imshow("Game", frame)
@@ -309,52 +264,6 @@ def find_tracks():
         with lock:
             shared["tracks"] = boxes
 
-def get_next_track(player, tracks):
-    if player is None or tracks is None:
-        return None
-
-    player_x, player_y = player
-    candidates = []
-
-    for box in tracks:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-        if x1 > player_x:  # ahead of player
-            candidates.append((x1, y1, x2, y2))
-
-    if not candidates:
-        return None
-
-    return min(candidates, key=lambda t: t[0])  # closest ahead
-
-def get_gap_size(current_track, next_track):
-    cx1, cy1, cx2, cy2 = current_track
-    nx1, ny1, nx2, ny2 = next_track
-
-    current_end = cx2
-    next_start = nx1
-
-    return next_start - current_end
-
-def get_jump_duration(gap, height_diff):
-    # base duration from gap
-    if gap < 80:
-        duration = 0.01
-    elif gap < 150:
-        duration = 0.12
-    elif gap < 250:
-        duration = 0.22
-    else:
-        duration = 0.45
-
-    # adjust for height
-    if height_diff < -20:   # next track higher
-        duration += 0.1
-    elif height_diff > 20:  # next track lower
-        duration -= 0.05
-
-    return max(0.03, duration)
-  
 def get_angle(x1, y1, x2, y2):
     return abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
 

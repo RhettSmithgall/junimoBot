@@ -9,6 +9,20 @@ import pyautogui
 import torch
 import torch.nn as nn
 
+class DQN(nn.Module):
+    def __init__(self, input_size, output_size):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_size)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 shared = {
     "frame": None,
     "player": None,
@@ -19,9 +33,6 @@ shared = {
     "level": 0,
     "attempt": 0
     }
-
-last_jump_time = 0
-JUMP_COOLDOWN = 0     
 
 lock = threading.Lock()
 running = True
@@ -36,114 +47,156 @@ def main():
         threading.Thread(target=find_kart),
         threading.Thread(target=find_tracks),
         threading.Thread(target=find_progress)
-        #threading.Thread(target=find_barricades),
     ]
-    
+
     for t in threads:
         t.daemon = True
         t.start()
 
-    last_time = time.time()
-    frames = 0
+    myprogress = progressTracker(0)
 
-    with lock:
-        myProgress = progressTracker(shared["progress"])
+    model = DQN(input_size=5, output_size=2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn = nn.MSELoss()
+
+    #model = DQN(input_size=5, output_size=2)
+    #model.load_state_dict(torch.load("dqn_model.pth"))
+    #model.eval()
+
+    epsilon = 1.0
+
+    prev_progress = 0
+
+    max_progress = 0
+    max_level = 0
+
+    step = 0
 
     while True:
         with lock:
             player = shared["player"]
             tracks = shared["tracks"]
-            frame = shared["frame"]
             progress = shared["progress"]
+            attempt = shared["attempt"]
 
-            if frame is None:
-                continue
+        myprogress.updateProgress(progress)
 
-            frame = frame.copy()
+        state = get_state(player, tracks, progress)
 
-        myProgress.updateProgress(progress)
+        if state is None:
+            continue
 
-        action(player,tracks)
+        state_t = torch.tensor(state)
 
-        if(roboVision(frame, player, tracks, progress)):
-           break
+        # ε-greedy
+        if np.random.rand() < epsilon:
+            action = np.random.randint(0, 2)
+        else:                        
+            with torch.no_grad():
+                q_vals = model(state_t)
+                action = torch.argmax(q_vals).item()
 
-        frames += 1
-        if time.time() - last_time >= 1:
-            #print("Loop FPS:", frames)
-            frames = 0
-            last_time = time.time()
+        # do action
+        do_action(action)
 
-def jump(duration):
-    pyautogui.keyDown('space')
-    time.sleep(duration)
-    pyautogui.keyUp('space')
+        # get next state
+        with lock:
+            new_progress = shared["progress"]
+            new_attempt = shared["attempt"]
+            player2 = shared["player"]
+            tracks2 = shared["tracks"]
 
+        myprogress.updateProgress(progress)
 
-def can_jump():
-    global last_jump_time
-    now = time.time()
+        died = new_attempt != attempt
 
-    if now - last_jump_time > JUMP_COOLDOWN:
-        last_jump_time = now
-        return True
-    return False
+        next_state = get_state(player2, tracks2, new_progress)
+        if next_state is None:
+            continue
 
+        reward = compute_reward(prev_progress, new_progress, died)
 
-def action(player, tracks):
+        prev_progress = new_progress
+
+        # --- TRAIN ---
+        next_state_t = torch.tensor(next_state)
+
+        q_vals = model(state_t)
+        q_val = q_vals[action]
+
+        with torch.no_grad():
+            next_q_vals = model(next_state_t)
+            max_next_q = torch.max(next_q_vals)
+
+        target = reward + (0.99 * max_next_q * (0 if died else 1))
+
+        loss = loss_fn(q_val, target)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if died:                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+            prev_progress = 0   
+            print(f"Run Number: {attempt} Progress achieved: {progress}")                      
+
+        # decay exploration
+        epsilon = max(0.1, epsilon * 0.995)  
+
+        with lock:
+            if(progress > max_progress):
+                max_progress = progress 
+                print(f"Furthest distance: {max_progress}") 
+
+        if step == 1000:
+            torch.save(model.state_dict(), "dqn_model.pth")  
+            step = 0
+
+        step+=1
+
+def compute_reward(prev_progress, current_progress, died):
+    reward = (current_progress - prev_progress) * 0.1
+
+    if died:
+        reward -= 10  # big punishment for failing
+
+    return reward
+
+def do_action(action):
+    if action == 1:
+        pyautogui.keyDown("space")
+    else:
+        pyautogui.keyUp("space")
+
+def get_state(player, tracks, progress):
     if player is None or tracks is None:
-        return
+        return None
 
-    player_x, player_y = player
+    px, py = player
 
-    # convert YOLO boxes → simple tuples
-    simple_tracks = []
+    nearest_y = py
+    slope = 0
+
+    min_dist = 99999
+
     for box in tracks:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        simple_tracks.append((x1, y1, x2, y2))
 
-    current = None
-    for t in simple_tracks:
-        x1, y1, x2, y2 = t
-        if x1 <= player_x <= x2 and abs(player_y - y1) < 60:
-            current = t
-            break
+        cy = (y1 + y2) // 2
+        dist = abs(cy - py)
 
-    if current is None:
-        return
+        if dist < min_dist:
+            min_dist = dist
+            nearest_y = cy
+            slope = int(box.cls[0])  # 0 flat, 1 down, 2 up
 
-    next_track = get_next_track(player, tracks)
-
-    # if nothing ahead → panic jump
-    if next_track is None:
-        if can_jump():
-            jump(0.35)
-        return
-
-    gap = get_gap_size(current, next_track)
-
-    # distance from player to edge
-    distance_to_edge = current[2] - player_x
-
-    # only jump near edge
-    if distance_to_edge < 120:
-        height_diff = next_track[1] - current[1]
-
-        duration = get_jump_duration(gap, height_diff)
-
-        if can_jump():
-            jump(duration)
-
-def get_current_track(player, tracks):
-    player_x,player_y = player
-
-    for t in tracks:
-        x, y, w, h = t
-        
-        if x <= player_x <= x + w:
-            if abs(player_y - y) < 50:  # tolerance
-                return t
-    return None
+    return np.array([
+        px / 1500,
+        py / 825,
+        nearest_y / 825,
+        slope / 2,
+        progress / 800
+    ], dtype=np.float32)
 
 #what run number are we on? What level?
 class progressTracker:
@@ -157,26 +210,27 @@ class progressTracker:
 
         if(progress < 40):
             return
-
-        print(f"OUT: {progress} {self.prev}")
+        
         if(progress+10 < self.prev and self.prev < 790):
             #reset
             self.prev = 0
             with lock:
                 shared["attempt"] += 1
                 shared["level"] = 0
-            return
+            return True
         
         if(progress < self.prev) and self.prev > 790:
             #end of a level!
             self.prev = 0
             with lock:
                 shared["level"] += 1
-            return
+            return False
 
         if(progress >= self.prev):
             #normal progression
             self.prev = progress
+
+        return False
 
 #see how far in a run the kart is
 def find_progress():
@@ -260,15 +314,15 @@ def roboVision(frame, player, tracks, progress):
 
             if cls == 0:
                 # flat
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 3)
+                cv2.line(frame, (x1, y1), (x2, y1), (255, 0, 0), 3)
 
             elif cls == 1:
                 # slope down
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.line(frame, (x1, y1), (x2, y1+60), (255, 0, 0), 2)
 
             elif cls == 2:
                 # slope up
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.line(frame, (x1, y1+60), (x2, y1), (255, 0, 0), 2)
 
 
     cv2.imshow("Game", frame)
@@ -309,52 +363,6 @@ def find_tracks():
         with lock:
             shared["tracks"] = boxes
 
-def get_next_track(player, tracks):
-    if player is None or tracks is None:
-        return None
-
-    player_x, player_y = player
-    candidates = []
-
-    for box in tracks:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-        if x1 > player_x:  # ahead of player
-            candidates.append((x1, y1, x2, y2))
-
-    if not candidates:
-        return None
-
-    return min(candidates, key=lambda t: t[0])  # closest ahead
-
-def get_gap_size(current_track, next_track):
-    cx1, cy1, cx2, cy2 = current_track
-    nx1, ny1, nx2, ny2 = next_track
-
-    current_end = cx2
-    next_start = nx1
-
-    return next_start - current_end
-
-def get_jump_duration(gap, height_diff):
-    # base duration from gap
-    if gap < 80:
-        duration = 0.01
-    elif gap < 150:
-        duration = 0.12
-    elif gap < 250:
-        duration = 0.22
-    else:
-        duration = 0.45
-
-    # adjust for height
-    if height_diff < -20:   # next track higher
-        duration += 0.1
-    elif height_diff > 20:  # next track lower
-        duration -= 0.05
-
-    return max(0.03, duration)
-  
 def get_angle(x1, y1, x2, y2):
     return abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
 
