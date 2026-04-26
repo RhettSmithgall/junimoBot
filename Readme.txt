@@ -11,3 +11,8 @@ each type to the player. Current problems are that the model hallucinates that s
 near the ui elements, creating massive bounding boxes, a stop gap at the moment is blocking these objects from being passed along as it 
 would require massive work re-training the yolo model with a more expansive dataset. A better reward and failsafe against false positives
 in score dropping would also help to better train the model. 
+
+
+references:
+https://colab.research.google.com/github/roboflow-ai/notebooks/blob/main/notebooks/train-yolov8-object-detection-on-custom-dataset.ipynb#scrollTo=u2Xtaekw3271
+https://github.com/tesseract-ocr/tesseract

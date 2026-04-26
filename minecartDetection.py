@@ -37,13 +37,13 @@ def main():
             frame = np.array(screenshot)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-            # 1. Single-pass detection for player and coins
+            # Single-pass detection for player and coins
             player_pos, coin_positions = detect_game_objects(frame, model)
 
-            # 2. Prioritize coins based on proximity to player
+            # Prioritize coins based on proximity to player
             sorted_coins = get_prioritized_coins(player_pos, coin_positions)
 
-            # 3. Existing logic for tracks and lines
+            # Existing logic for tracks and lines
             tracks_pos = findlines(frame)
 
            
