@@ -3,120 +3,153 @@ import mss
 import numpy as np
 import math
 import os
-import detectimage
 import time
 from ultralytics import YOLO
 
+
 def main():
+
     with mss.mss() as sct:
         gameScreen = {
-            "top": 140,
-            "left": 10,
+            "top": 240,
+            "left": 100,
             "width": 1500,
             "height": 850
         }
 
-        # make sure positives folder exists
-        os.makedirs("positives", exist_ok=True)
 
-        img_counter = 0
-        cap = cv2.VideoCapture(0)
+        os.makedirs("positives", exist_ok=True)
         prev_time = 0
-        model = YOLO("runs/detect/train2/weights/best.pt")
+       
+
+        # Load your specific custom model
+        model = YOLO("runs/detect/train14/weights/best.pt")
 
         while True:
-            #capture the game screen
-            ret,frame = cap.read()
+
             screenshot = sct.grab(gameScreen)
             curr_time = time.time()
-            fps = 1/ (curr_time - prev_time)
+            fps = 1 / (curr_time - prev_time) if (curr_time - prev_time) > 0 else 0
             prev_time = curr_time
+           
+
+            # Prepare frame
             frame = np.array(screenshot)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-            #playerShot = frame[10:850,200:500]
-            
+            # 1. Single-pass detection for player and coins
+            player_pos, coin_positions = detect_game_objects(frame, model)
 
-            player_pos = detect_minecart(frame,model)
+            # 2. Prioritize coins based on proximity to player
+            sorted_coins = get_prioritized_coins(player_pos, coin_positions)
 
+            # 3. Existing logic for tracks and lines
             tracks_pos = findlines(frame)
 
-            barricade_pos = findBarricades(frame)
+           
 
-            print(f"player: {player_pos} tracks: {len(tracks_pos)} barricade?: {barricade_pos}")
+            # 4. Draw everything
+            fullscreen = roboVision(player_pos, tracks_pos, sorted_coins, frame)
 
-            fullscreen = roboVision(player_pos,tracks_pos,barricade_pos, frame)
-            cv2.putText(fullscreen, f"FPS: {int(fps)}", (20, 70), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(fullscreen, f"FPS: {int(fps)}", (20, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             cv2.imshow("Region Capture", fullscreen)
 
-            if cv2.waitKey(1) & 0xFF == 27:  # press ESC to quit
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC to quit
                 break
-    cap.release()
+
+
     cv2.destroyAllWindows()
-    return
 
-#see what the robot sees
-def roboVision(player_pos = 0, tracks_pos = 0, barriacade_pos = 0, frame = 0):
+
+def detect_game_objects(frame, model):
+
+    """Detects minecart and coins in a single pass."""
+
+    results = model(frame, verbose=False, stream=False)
+    names = model.names
+    #identify class ids based on models class names
+    minecart_id = next((id for id, name in names.items() if name == "minecart"), None)
+    coins_id = next((id for id, name in names.items() if name == "coins"), None)
+    #tracks_id = next((id for id, name in names.items() if name == "tracks"), None)
+
+
+    player_pos = (0, 0, 0, 0)
+    coin_positions = []
+
+    for r in results:
+        for box in r.boxes:
+            cls_id = int(box.cls)
+            #filter for minecart
+            if cls_id == minecart_id:
+                player_pos = tuple(map(int, box.xyxy[0]))
+                #filter for coins
+            elif cls_id == coins_id:
+                coin_positions.append(tuple(map(int, box.xyxy[0])))
+
+    return player_pos, coin_positions
+
+
+def get_prioritized_coins(player_pos, coin_positions):
+    """Sorts coins by distance from the player's center."""
+    if player_pos == (0, 0, 0, 0) or not coin_positions:
+        return coin_positions
     
-    x1, y1, x2, y2 = player_pos
-    x1
-    x2
-    # draw box
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (255,0,0), 2)
+    #extract player position
+    px1, py1, px2, py2 = player_pos
+    p_center = ((px1 + px2) / 2, (py1 + py2) / 2)
 
-    # label
-    cv2.putText(frame, "minecart", (x1, y1+10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
+    def calculate_distance(coin):
+        cx1, cy1, cx2, cy2 = coin
+        #coin center cords
+        c_center = ((cx1 + cx2) / 2, (cy1 + cy2) / 2)
+        # Euclidean distance formula
+        return math.sqrt((p_center[0] - c_center[0])**2 + (p_center[1] - c_center[1])**2)
+    
+    return sorted(coin_positions, key=calculate_distance)
+
+
+def roboVision(player_pos, tracks_pos, sorted_coins, frame):
+    # Create a copy of the frame for the transparency overlay
+    overlay = frame.copy()
+    # Draw track highlights on the OVERLAY
     for line in tracks_pos:
-        x1, y1, x2, y2 = line
-        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
-
-    #MPx, MPy = barriacade_pos
-    frame = detectimage.outline_objects(frame, 'barricade3.png', threshold=0.6)
-    #cv2.putText(frame,"Barrricade",(MPx, MPy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.6,(255, 0, 0),2)
-    #cv2.rectangle(frame, (MPx,MPy),(MPx+40,MPy+60),(255,0,0),2)
+        lx1, ly1, lx2, ly2 = line
+        # Draw a thick, neon-green line (BGR: 0, 255, 0)
+        cv2.line(overlay, (lx1, ly1), (lx2, ly2), (0, 255, 0), 6) # Increased thickness for "glow"
+        
+    # Blend the overlay with the original frame (0.4 is the transparency/alpha)
+    alpha = 0.4
+    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
     
+    # extract player position
+    px1, py1, px2, py2 = player_pos
+    p_center = (int((px1 + px2) / 2), int((py1 + py2) / 2))
+
+    if px1 != 0:
+        cv2.rectangle(frame, (px1, py1), (px2, py2), (255, 0, 0), 2)
+
+    #draw colins and target line
+    for i, (cx1, cy1, cx2, cy2) in enumerate(sorted_coins):
+        c_center = (int((cx1 + cx2) / 2), int((cy1 + cy2) / 2))
+        # draw closest coin
+        if i == 0:
+            color, label = (0, 0, 255), "TARGET"
+            if px1 != 0:
+                cv2.line(frame, p_center, c_center, (255, 255, 255), 2)
+                cv2.putText(frame, label,(cx1,cy1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        else:
+            color, label = (0, 255, 255), "coin"
+        cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), color, 1)
 
     return frame
 
 
-def detect_minecart(frame,model):
-    results = model(frame, max_det=1, verbose=False, stream=False)
-
-    for r in results:
-        for box in r.boxes.xyxy:
-            x1, y1, x2, y2 = map(int, box)
-            return x1, y1, x2, y2
-    return 0,0,0,0
-
-def findBarricades(frame):
-    method = cv2.TM_SQDIFF_NORMED
-
-    # Read the images from the file
-    small_image = cv2.imread('barricade.png')
-    large_image = frame
-
-    result = cv2.matchTemplate(large_image, small_image, method)
-
-    # We want the minimum squared difference
-    mn,_,mnLoc,_ = cv2.minMaxLoc(result)
-
-    confidence = 1 - mn  # convert to "higher is better"
-
-    if confidence < 0.6:
-        return 0,0
-
-    # Draw the rectangle:
-    # Extract the coordinates of our best match
-    MPx,MPy = mnLoc
-
-    # The image is only displayed if we call this
-    return MPx,MPy
 
 def get_angle(x1, y1, x2, y2):
     return abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
+
 
 def findlines(frame):
     img = frame
@@ -128,7 +161,6 @@ def findlines(frame):
     ]
 
     tolerance = 20
-
     # --- build mask ---
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
 
@@ -138,15 +170,12 @@ def findlines(frame):
 
         color_mask = cv2.inRange(img, lower, upper)
         mask = cv2.bitwise_or(mask, color_mask)
-
     # --- clean noise ---
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
     # --- edges ---
     edges = cv2.Canny(mask, 50, 150)
-
     # --- hough lines ---
     lines = cv2.HoughLinesP(
         edges,
@@ -156,19 +185,18 @@ def findlines(frame):
         minLineLength=40,
         maxLineGap=10
     )
-
     tracks = []
-
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[0]
             angle = get_angle(x1, y1, x2, y2)
             length = np.hypot(x2 - x1, y2 - y1)
-            
+
             if (length > 50) and (angle == 0 or angle == 45):
                 #print(angle)
                 tracks.append((x1, y1, x2, y2))
-
     return tracks
 
-main()
+
+if __name__ == "__main__":
+    main() 

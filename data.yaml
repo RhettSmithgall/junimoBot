@@ -1,0 +1,13 @@
+train: ../dataset/images
+val: ../dataset/images
+test: ../dataset/images
+
+nc: 8
+names: ['barricade', 'boulder', 'bubble', 'cherry', 'coins', 'minecart', 'score', 'tracks']
+
+roboflow:
+  workspace: brians-workspace-vvhmn
+  project: brians-workspace-vvhmn
+  version: dataset
+  license: Private
+  url: https://app.roboflow.com/brians-workspace-vvhmn/brians-workspace-vvhmn/dataset
